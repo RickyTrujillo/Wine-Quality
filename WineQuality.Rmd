@@ -1,0 +1,545 @@
+---
+title: "Wine Quality"
+author: "Ricky Trujillo"
+date: "2023-05-03"
+output: html_document
+---
+# Libraries
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(gapminder)
+library(ggplot2)
+library(gganimate)
+library(gifski)
+library(magick)
+library(GGally)
+library(ggh4x)
+library(broom)
+library(plotly)
+library(ggcorrplot)
+library(gridExtra)
+```
+
+
+# Functions
+```{r}
+normalize<- function(x){
+  return((x-mean(x))/sd(x))
+}
+
+#-----------------------------
+k_means<-function(data, k){
+  
+      set.seed(4990)
+      #Initialization 
+      withinss<-c() #Within-cluster sum of squares
+      stop_eps<- 10e-7 #stopping error between centroids
+      dist_eps<-10e5 # initializing distance metric for centroids to be large
+      centers<-c() # centers list
+      conver<-FALSE # boolean for convergence
+      iter<-1 #iteration count until convergence
+      
+      
+      #-----------------------------------------
+      if(is.null(centers)){ #checking if the list is empty
+        #if empty then randomly select k values for centers
+        centers <- sample.int(nrow(data), k)
+      }
+      
+      #centroids are assigned from randomly selected center values
+      centroids<-data[centers, ]
+      centroids_hist<-data.frame(centroids)
+      
+      #Randomly assigns clusters to observations
+      cluster <- c(sample.int(k, nrow(data), replace = TRUE))
+      cluster_hist <- data.frame(data,cluster, iter)
+      
+      while (conver==FALSE) {
+        old_centroids <-centroids #safe keeping of old clusters
+        for (i in 1:nrow(data)){
+          #sum of squares for centroids
+          dist<-apply(centroids, 1, function(x) sum((x - data[i,])^2))
+          #assign to cluster with smallest distance
+          cluster[i]<-which.min(dist)
+        }
+        for (j in 1:k) {
+          #updating cluster meean
+          centroids[j, ]<- apply(data[cluster == j, ], 2, mean)
+        }
+        
+        #Iterative count until convergence
+        iter<- iter+1
+        
+        #Keeping the history of the centroid positions and cluster assignments
+        centroids_hist<- rbind(centroids_hist, data.frame(centroids))
+        cluster_hist<- rbind(cluster_hist, data.frame(data, cluster, iter))
+        
+        #Distance between old centroid and new centroid
+        dist_eps<- mean(as.matrix((old_centroids-centroids)^2))
+        #checking condition: if distance is minimal then converge
+        if(dist_eps <= stop_eps){
+          conver<-TRUE
+        }
+      }
+return(list(data=data.frame(data, cluster),
+            cluster=cluster,
+            centroids=centroids,
+            centroids_hist=centroids_hist,
+            cluster_hist=cluster_hist,
+            iterations=iter))
+}
+```
+
+# Normalizing the data
+```{r}
+wine<- read.csv("./Wine_Quality_Data.csv")
+
+colSums(is.na(wine))
+which(is.null(wine))
+
+colnames(wine)
+
+wine_scaled<-wine%>%
+  mutate(fixed_acidity=normalize(fixed_acidity),
+         volatile_acidity=normalize(volatile_acidity),
+         citric_acid=normalize(citric_acid), 
+         residual_sugar=normalize(residual_sugar),
+         chlorides=normalize(chlorides),
+         free_sulfur_dioxide=normalize(free_sulfur_dioxide),
+         total_sulfur_dioxide=normalize(total_sulfur_dioxide),
+         density=normalize(density),
+         pH=normalize(pH),
+         sulphates=normalize(sulphates),
+         alcohol=normalize(alcohol),
+         quality=normalize(quality))%>%
+  na.omit()
+```
+
+
+
+
+# Exploratory Analysis
+```{r, warning=FALSE}
+ggp_wine<- ggpairs(wine_scaled, aes(color=color, alpha=0.1))
+print(ggp_wine, progress = F)
+
+p1<- ggplot(wine_scaled, aes(x=fixed_acidity, fill=color)) + geom_density(alpha=0.4)
+p2<- ggplot(wine_scaled, aes(x=volatile_acidity, fill=color)) + geom_density(alpha=0.4)
+p3<- ggplot(wine_scaled, aes(x=total_sulfur_dioxide, fill=color)) + geom_density(alpha=0.4)
+p4<- ggplot(wine_scaled, aes(x=fixed_acidity, y=alcohol, color=color))+geom_point()
+p5<- ggplot(wine_scaled, aes(x=fixed_acidity, y=density, color=color))+geom_point(alpha=0.3)
+p6<- ggplot(wine_scaled, aes(x=fixed_acidity, y=citric_acid, color=color))+geom_point(alpha=0.4)
+
+mytheme <- gridExtra::ttheme_minimal(core = list(padding=unit(c(10, 10), "mm"),fontface=2, 
+                                                 bg_params = list(fill= blues9[1:4], col=NA),
+                                                 fg_params=list(fontface=3)), 
+                                     colhead=list(fg_params=list(col="navyblue", fontface=2)))
+
+PlotsList<- list(p1,p2,p3,p4,p5,p6)
+grid.arrange(grobs=PlotsList, theme=mytheme, ncol=3)
+
+# White wine seems to be the less acidic and citricy type. It has a larger 
+# density for smaller values of concentration for acidity and citric acid 
+# compared to red wine. 
+
+# fixed_acidity
+# volatile_acidity
+# citric acid
+
+# Red wine have a lower sulfur dioxide concentration. White wine would need
+# more in order to have a longer shelf life. 
+# free sulfur dioxide
+# total sulfur dioxide
+```
+```{r}
+corr=round(cor(wine_scaled[,-13]), 1)
+ggcorrplot(corr, hc.order = TRUE, 
+           type = "lower", 
+           lab = TRUE, 
+           lab_size = 3, 
+           method="circle", 
+           colors = c("tomato2", "white", "springgreen3"), 
+           title="Correlation of wine variables")
+```
+
+# KMeans & Cluster Animation
+```{r}
+# Elbow Methods
+kmax<-10
+k_clusters<- seq(1,kmax, 1)
+wss<-c() #within clusters sum of squares 
+
+set.seed(4990)
+for (k in k_clusters){
+  cluster_k<-kmeans(wine_scaled[,-c(13)], centers=k, trace = FALSE, nstart=10)
+  wss[k]<- cluster_k$tot.withinss
+}
+
+elbow<- data.frame(K= 1:kmax,wss)
+ggplot(elbow, aes(x=K, y=wss))+
+  geom_point()+geom_line()+
+  scale_x_continuous(breaks = seq(1, 20, by = 1))
+```
+
+```{r}
+#cluster_k$iter #7
+results_4$iterations #5
+
+k<-4
+results_4<-k_means(wine_scaled[,-c(13)], k=k)
+
+results_4$centroids$clusters<-1:k
+results_4$centroids_hist$cluster<-rep(1:k, results_4$iterations)
+results_4$centroids_hist$iter<-c(rep(1,k), rep(2,k),rep(3,k),rep(4,k), rep(5,k),
+                               rep(6,k), rep(7,k),rep(8,k),rep(9,k), rep(10,k),
+                               rep(11,k), rep(12,k),rep(13,k),rep(14,k))
+
+results_4$cluster_hist$isCentroid<-FALSE
+results_4$centroids_hist$isCentroid<-TRUE
+
+kmeans_data<-rbind(results_4$centroids_hist, results_4$cluster_hist)
+
+#View(results$cluster_hist)
+#View(results$centroids_hist)
+
+#levels(as.factor(kmeans_data$cluster))
+```
+
+```{r}
+# Highlight describes the data points that are centroids
+highlight<- kmeans_data%>%
+  filter(isCentroid==TRUE)
+
+# Plots the live animation between two variables of choice color coded by cluster
+p<-ggplot(kmeans_data, aes(x=fixed_acidity, y=alcohol, color=as.factor(cluster)))+
+  geom_point(aes(group=seq_len(nrow(kmeans_data))))+
+  geom_text(data=highlight, mapping=aes(x=fixed_acidity, y=alcohol, label=cluster),color="black",hjust=0.5,vjust=0.5)+
+  transition_states(iter)+
+  labs(title = 'Iter: {closest_state}', x = 'fixed_acidity', y = 'alcohol')
+
+animate(p, duration = 15, fps = 20, width = 500, height = 500, renderer = gifski_renderer())
+anim_save('fixed_acidity_alcohol4.gif')
+
+p2<-ggplot(kmeans_data, aes(x=fixed_acidity, y=density, color=as.factor(cluster)))+
+  geom_point(aes(group=seq_len(nrow(kmeans_data))))+
+  geom_text(data=highlight, mapping=aes(x=fixed_acidity, y=density, label=cluster),color="black",hjust=0.5,vjust=0.5)+
+  transition_states(iter)+
+  labs(title = 'Iter: {closest_state}', x = 'fixed_acidity', y = 'density')
+
+animate(p2, duration = 15, fps = 20, width = 500, height = 500, renderer = gifski_renderer())
+anim_save('fixed_acidity_density4.gif')
+
+# Plots the changes of the centroids frame-by-frame (not by animation) using facet wrap by iteration
+ggplot(kmeans_data%>%select(-isCentroid), aes(x=fixed_acidity,y=alcohol, colour=as.factor(kmeans_data$cluster)))+
+  geom_point(alpha=ifelse(kmeans_data$isCentroid, 1, 0.5))+
+  #geom_point(highlight, mapping=aes(x=fixed_acidity, y=alcohol), color="black")+
+  geom_text(data=highlight, mapping=aes(x=fixed_acidity, y=alcohol, label=cluster),color="black",hjust=0.5,vjust=0.5)+
+  facet_wrap(~iter)
+
+```
+
+```{r, fig.width=10,fig.height=11}
+wine_num4<- results_4$cluster_hist%>%
+  filter(iter==14)%>%
+  select(-iter)%>%
+  select(where(is.numeric), cluster)%>%
+  gather(var, value, -cluster)
+
+ggplot(wine_num4, aes(group=as.factor(cluster), y=value, fill=as.factor(cluster)), xlab="")+
+  geom_boxplot()+
+  facet_wrap(~var, scales="free_y", ncol=3)+
+  scale_y_continuous(n.break=10)
+
+# Describing what each cluster represents: 
+# Cluster 1
+# Low Alcohol percentage, high residual sugar, high total_sulfur dioxide 
+# Sweet white wines (To prevent secondary fermentation from sugar), sulfur dioxide is used to control the added sugar from increasing the alcohol percentage and keeping the same sweet taste
+
+# Cluster 2
+# Highest in alcohol percentage, highest quality (ranged from 3-9), second highest for wine must(fruit juice) density with water (before yeast is added)
+# Top Shelf Red Wine (with intense flavor)
+
+# Cluster 3
+# highest in citric acid, fixed_acidity is high, sulfates is
+# Average wine 
+
+# Cluster 4 
+# lowest in citric acid, highest ph, highest volatile acidity, lowest in total sulfur dioxide
+# Low-Shelf Red Wines
+```
+```{r, fig.width=10,fig.height=11}
+# Do the same as above with 3 clusters this time
+results_3$iterations
+
+
+k<-3
+results_3<-k_means(wine_scaled[,-c(13)], k=k)
+
+results_3$centroids$clusters<-1:k
+results_3$centroids_hist$cluster<-rep(1:k, results_3$iterations)
+results_3$centroids_hist$iter<-c(rep(1,k), rep(2,k),rep(3,k),rep(4,k), rep(5,k),
+                               rep(6,k), rep(7,k),rep(8,k),rep(9,k), rep(10,k),
+                               rep(11,k), rep(12,k),rep(13,k),rep(14,k))
+
+results_3$cluster_hist$isCentroid<-FALSE
+results_3$centroids_hist$isCentroid<-TRUE
+
+kmeans_data3<-rbind(results_3$centroids_hist, results_3$cluster_hist)
+kmeans_data3
+
+highlight3<- kmeans_data3%>%
+  filter(isCentroid==TRUE)
+
+p3<-ggplot(kmeans_data3, aes(x=fixed_acidity, y=alcohol, color=as.factor(cluster)))+
+  geom_point(aes(group=seq_len(nrow(kmeans_data3))))+
+  geom_text(data=highlight, mapping=aes(x=fixed_acidity, y=alcohol, label=cluster),color="black",hjust=0.5,vjust=0.5)+
+  transition_states(iter)+
+  labs(title = 'Iter: {closest_state}', x = 'fixed_acidity', y = 'alcohol')
+
+animate(p3, duration = 15, fps = 20, width = 500, height = 500, renderer = gifski_renderer())
+anim_save('fixed_acidity_alcohol3.gif')
+
+p4<-ggplot(kmeans_data3, aes(x=fixed_acidity, y=density, color=as.factor(cluster)))+
+  geom_point(aes(group=seq_len(nrow(kmeans_data3))))+
+  geom_text(data=highlight, mapping=aes(x=fixed_acidity, y=density, label=cluster),color="black",hjust=0.5,vjust=0.5)+
+  transition_states(iter)+
+  labs(title = 'Iter: {closest_state}', x = 'fixed_acidity', y = 'density')
+
+animate(p4, duration = 15, fps = 20, width = 500, height = 500, renderer = gifski_renderer())
+anim_save('fixed_acidity_density3.gif')
+
+wine_num3<- results_3$cluster_hist%>%
+  filter(iter==14)%>%
+  select(-iter)%>%
+  select(where(is.numeric), cluster)%>%
+  gather(var, value, -cluster)
+
+ggplot(wine_num3, aes(group=as.factor(cluster), y=value, fill=as.factor(cluster)), xlab="")+
+  geom_boxplot()+
+  facet_wrap(~var, scales="free_y", ncol=3)+
+  scale_y_continuous(n.break=10)
+```
+
+# Visualizing higher dimension data through PCA
+```{r}
+# PCA1
+# Higher sulfur dioxide and lower in volatile acidity
+# Measure of gaseous components
+# Quality of wine is higher when volatile acidity is lower
+
+# PCA2
+# High density and low alcohol 
+# Flavor Intensity
+
+# PCA3
+# low fixed acidity, low citric acid, high pH
+# Measure of acidity
+
+wine_pca4<- results_4$cluster_hist%>%
+  filter(iter==14)%>% #final iteration
+  select(-c(cluster, iter, isCentroid))%>%
+  prcomp(scale=FALSE)
+
+summary(wine_pca4)
+wine_pca4$rotation
+
+#added the PCA values to the original data matrix 
+wine_pca_4<- wine_pca4%>%
+  augment(results_4$cluster_hist%>%filter(iter==14))
+
+wine_pca_4%>%
+  filter(cluster==1)%>%
+  select(c(.fittedPC1, .fittedPC2, .fittedPC3))%>%
+  colMeans()
+
+wine_pca_4%>%
+  filter(cluster==2)%>%
+  select(c(.fittedPC1, .fittedPC2, .fittedPC3))%>%
+  colMeans()
+
+wine_pca_4%>%
+  filter(cluster==3)%>%
+  select(c(.fittedPC1, .fittedPC2, .fittedPC3))%>%
+  colMeans()
+
+wine_pca_4%>%
+  filter(cluster==4)%>%
+  select(c(.fittedPC1, .fittedPC2, .fittedPC3))%>%
+  colMeans()
+
+```
+
+```{r}
+p4<-plot_ly(wine_pca_4, x=~.fittedPC1, y=~.fittedPC2, z=~.fittedPC3, color = ~cluster)%>%
+  add_markers(size=1.5)
+
+print(p4)
+```
+
+```{r}
+wine_pca3<- results_3$cluster_hist%>%
+  filter(iter==14)%>% #final iteration
+  select(-c(cluster, iter, isCentroid))%>%
+  prcomp(scale=FALSE) # already scaled 
+
+summary(wine_pca3)
+wine_pca3$rotation
+
+#added the PCA values to the original data matrix 
+wine_pca_3<- wine_pca3%>%
+  augment(results_3$cluster_hist%>%filter(iter==14))
+```
+
+```{r}
+p3 <-plot_ly(wine_pca_3, x=~.fittedPC1, y=~.fittedPC2, z=~.fittedPC3, color = ~cluster)%>%
+  add_markers(size=1.5)
+
+print(p3)
+
+wine_pca_3%>%
+  filter(cluster==1)%>%
+  select(c(.fittedPC1, .fittedPC2, .fittedPC3))%>%
+  colMeans()
+
+wine_pca_3%>%
+  filter(cluster==2)%>%
+  select(c(.fittedPC1, .fittedPC2, .fittedPC3))%>%
+  colMeans()
+
+wine_pca_3%>%
+  filter(cluster==3)%>%
+  select(c(.fittedPC1, .fittedPC2, .fittedPC3))%>%
+  colMeans()
+```
+
+```{r}
+wine_pca_num<- wine_pca2%>%
+  select(c(.fittedPC1, .fittedPC2, .fittedPC3, cluster))%>%
+  gather(var, value, -cluster)
+
+ggplot(wine_pca_num, aes(group=as.factor(cluster), y=value, fill=as.factor(cluster)), xlab="")+
+  geom_boxplot()+
+  facet_wrap(~var, scales="free_y", ncol=3)+
+  scale_y_continuous(n.break=10)
+
+# Analyzing the clusters based off the PCA values
+# Cluster 1
+# High PC1 = highest gaseous components in wine
+
+# Cluster 2
+# Lowest PC2 = Low flavored wines 
+
+# Cluster 3
+# Average Cluster = Average wines
+
+# Cluster 4
+# Highest PC3 = High levels of acidity
+
+```
+
+# Gaussian Mixture
+```{r}
+# Hugo
+library(mclust)
+library(factoextra)
+# with 4 clusters(optimal according to the model above)
+
+fit_4 <- Mclust(wine_scaled[,-13], G = 4, modelNames = c( 'VVV')) # removing the categorical variable
+fit_5$classification
+summary(fit_5, parameters = TRUE) # gives us mixing probabilities along with variance and covarince matrix of components
+fit_4
+
+wine_gmm<-cbind(wine_scaled, cluster= fit_3$classification)
+
+
+ggplot(wine_gmm, aes(x=volatile_acidity, y=density, color=as.factor(cluster)))+geom_point()
+wine_gmm_res<- wine_gmm%>%
+  select(where(is.numeric))%>%
+  select(-c(cluster))%>%
+  prcomp(scale=FALSE) # already scaled 
+
+wine_gmm_res$rotation
+summary(wine_gmm_res)
+
+#added the PCA values to the original data matrix 
+wine_pca_gmm<- wine_gmm_res%>%
+  augment(wine_gmm)
+
+p_gmm <- plot_ly(wine_pca_gmm, x=~.fittedPC1, y=~.fittedPC2, z=~.fittedPC3, color = ~cluster)%>%
+  add_markers(size=1.5)
+
+p_gmm
+```
+
+```{r}
+#-----------
+
+# Classification: plot showing the clustering
+fviz_mclust(fit_3, "classification", geom = "point", 
+            pointsize = .15, palette = "Okabe-Ito")
+```
+
+```{r}
+# Classification uncertainty
+fviz_mclust(fit_3, "uncertainty", palette = "Okabe-Ito")
+
+fit_4$classification
+fit_4$parameters
+
+table(wine_scaled$color, fit_4$classification) # not sure how to interpret this?
+# - some clusters tend to be more white wine and others more red.
+# look at the pca's for each cluster to see what qualities each cluster has
+
+adjustedRandIndex(wine_scaled$color, fit_4$classification) # portion accuracy of the clusters(higher the better)
+
+fit_4$z # matrix with the i'th observation probability of being part of that class
+
+dens <- densityMclust(wine_scaled[,-13]) # 3D plots 
+
+plot(dens, what = 'density', type= 'persp') # 3D plots
+```
+
+
+```{r}
+# Mauricio
+library(ClusterR)
+wine_scaled_new <- wine_scaled %>% dplyr::select(-color)
+
+gmm = GMM(wine_scaled_new, 4, 
+          dist_mode = "eucl_dist", 
+          seed_mode = "random_subset", 
+          km_iter = 10, 
+          em_iter = 5, 
+          verbose = FALSE)
+
+pr = predict(gmm, newdata = wine_scaled_new)
+
+wine_scaled$cluster <- NA
+wine_scaled$cluster <- pr
+
+
+ggplot(wine_scaled, 
+       aes(fixed_acidity, residual_sugar, color = as.factor(cluster))) +
+  geom_point()
+
+gmm2 = GMM(wine_scaled_new, 3, 
+          dist_mode = "eucl_dist", 
+          seed_mode = "random_subset", 
+          km_iter = 10, 
+          em_iter = 5, 
+          verbose = FALSE)
+
+pr = predict(gmm, newdata = wine_scaled_new)
+
+wine_scaled$cluster <- NA
+wine_scaled$cluster <- pr
+
+
+ggplot(wine_scaled, 
+       aes(fixed_acidity, residual_sugar, color = as.factor(cluster))) +
+  geom_point()
+```
+
+
