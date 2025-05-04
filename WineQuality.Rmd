@@ -1,7 +1,6 @@
 ---
 title: "Wine Quality"
 author: "Ricky Trujillo"
-date: "2023-05-03"
 output: html_document
 ---
 # Libraries
@@ -441,7 +440,6 @@ ggplot(wine_pca_num, aes(group=as.factor(cluster), y=value, fill=as.factor(clust
 
 # Gaussian Mixture
 ```{r}
-# Hugo
 library(mclust)
 library(factoextra)
 # with 4 clusters(optimal according to the model above)
@@ -499,47 +497,6 @@ fit_4$z # matrix with the i'th observation probability of being part of that cla
 dens <- densityMclust(wine_scaled[,-13]) # 3D plots 
 
 plot(dens, what = 'density', type= 'persp') # 3D plots
-```
-
-
-```{r}
-# Mauricio
-library(ClusterR)
-wine_scaled_new <- wine_scaled %>% dplyr::select(-color)
-
-gmm = GMM(wine_scaled_new, 4, 
-          dist_mode = "eucl_dist", 
-          seed_mode = "random_subset", 
-          km_iter = 10, 
-          em_iter = 5, 
-          verbose = FALSE)
-
-pr = predict(gmm, newdata = wine_scaled_new)
-
-wine_scaled$cluster <- NA
-wine_scaled$cluster <- pr
-
-
-ggplot(wine_scaled, 
-       aes(fixed_acidity, residual_sugar, color = as.factor(cluster))) +
-  geom_point()
-
-gmm2 = GMM(wine_scaled_new, 3, 
-          dist_mode = "eucl_dist", 
-          seed_mode = "random_subset", 
-          km_iter = 10, 
-          em_iter = 5, 
-          verbose = FALSE)
-
-pr = predict(gmm, newdata = wine_scaled_new)
-
-wine_scaled$cluster <- NA
-wine_scaled$cluster <- pr
-
-
-ggplot(wine_scaled, 
-       aes(fixed_acidity, residual_sugar, color = as.factor(cluster))) +
-  geom_point()
 ```
 
 
